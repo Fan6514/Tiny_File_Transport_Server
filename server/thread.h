@@ -17,6 +17,7 @@
 #define SUCESS 0
 #define ERROR -1
 #define MAXLINE 4096	// 缓存大小
+#define CMDLINE 128 	// 命令行和文件名大小
 #define ARGC 10			// 命令参数个数
 #define NEW_FILE 1
 #define OLD_FILE 2
@@ -25,5 +26,6 @@ int thread_create(int connfd);
 void *thread_work(void* arg);
 void getSysTime(char * buf);
 void send_filelist(int sockfd);
-void putfile(int connfd, char* file_name);
+void putfile(int connfd, char* filename);
+void getfile(int connfd, char* filename);
 

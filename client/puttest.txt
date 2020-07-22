@@ -1,2 +1,1 @@
-测试文档
-测试上传文件功能
+This file is a file that used to testing function of put. 

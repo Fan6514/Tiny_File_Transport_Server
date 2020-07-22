@@ -1,0 +1,12 @@
+Tiny File Transport Server
+version - 0.1 (2020 July 21)
+
+Usage: ./cli [ip_address]	connect TFT Server
+
+Command:
+    close		- Secure shutdown of server and local client
+    exit		- Exit local client
+    quit		- Exit local client
+    ls			- View server file list
+    get <filename>	- Download a file from server to local
+    put <filename>	- Upload a file from local to server    

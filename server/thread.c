@@ -23,6 +23,7 @@ int thread_create(int connfd)
 	int ret;
 
 	ret = pthread_create(&tid, NULL, thread_work, (void*)connfd);
+	pthread_detach(tid);
 	if (ret != 0)
 		return ERROR;
 	return SUCESS;
@@ -38,17 +39,20 @@ int thread_create(int connfd)
 void *thread_work(void* arg)
 {
 	int connfd = (int)arg;
-	char recvline[MAXLINE], sendline[MAXLINE];
+	char recvline[CMDLINE], sendline[CMDLINE];
 	int i;
 
 	while (1) {		// 对客户端发送的命令进行解析
-		memset(recvline, 0, MAXLINE);
-		int n = recv(connfd, recvline, MAXLINE, 0);
+		memset(recvline, 0, CMDLINE);
+		int n = recv(connfd, recvline, CMDLINE, 0);
 
 		if (strncmp(recvline, "close", 5) == 0 ) {
 			send(connfd, "close", 5, 0);
 			printf("The server is closing...\n");
 			exit(0);
+		}
+		else if (strncmp(recvline, "quit", 4) == 0) {
+			break;
 		}
 		if (n <= 0)	// recv 返回 0 表示通信双方关闭连接
 			break;
@@ -72,7 +76,11 @@ void *thread_work(void* arg)
 			putfile(connfd, comm_argv[1]);
 			continue;
 		}
+		else if (strncmp(cmd, "get", 3) == 0) {
+			getfile(connfd, comm_argv[1]);
+		}
 	}
+	printf("Client is closed.\n");
 	return NULL;
 }
 
@@ -102,7 +110,7 @@ void send_filelist(int sockfd)
 {
 	DIR 			*dp;
 	struct dirent 	*dirp;
-	char file_name[4096] = {0};
+	char file_name[CMDLINE] = {0};
 
 	if ((dp = opendir("./file")) == NULL){
 		printf("opendir error");
@@ -118,7 +126,7 @@ void send_filelist(int sockfd)
 		// fputs(file_name, stdout);
 	}
 	strcat(file_name, "\n");
-	send(sockfd, file_name, strlen(file_name), 0);
+	send(sockfd, file_name, CMDLINE, 0);
 
 	closedir(dp);
 	return;
@@ -131,32 +139,33 @@ void send_filelist(int sockfd)
  * Called by :	thread_work()
  * notice : 	
  * ***********************************************************/
-char buffer[MAXLINE] = { 0 };
-char filename[MAXLINE] = { 0 };
-
-void putfile(int connfd, char* file_name)
+static char file_cache[MAXLINE] = { 0 };		// 文件接收与发送缓存
+void putfile(int connfd, char* filename)
 {
 	int fd;
-	int flag = 0;
-	long long bytes, file_size, newfile_size;
+	long long bytes, file_size;
+	char buffer[CMDLINE] = { 0 };
+	char file_path[CMDLINE] = { 0 }; 		// 文件本地路径
 
-	strcpy(filename, "./file/");
-	strcat(filename, file_name);
+	strcpy(file_path, "./file/");
+	strcat(file_path, filename);
 
+	/* 向客户端发送 begin 指令 */
 	strcpy(buffer, "begin");
-	printf("File %s from client ready to receive.\n", file_name);
-	send(connfd, buffer, MAXLINE, 0);
+	printf("File %s from client ready to receive.\n", filename);
+	send(connfd, buffer, strlen(buffer), 0);
+	memset(buffer, 0, CMDLINE);
 
-	/* 接收文件的大小 */
-	recv(connfd, buffer, MAXLINE, 0);
+	/*  接收客户端发送文件的大小 */
+	recv(connfd, buffer, CMDLINE, 0);
 	printf("File Size: %s\n", buffer);
 	file_size = atoll(buffer);
 
 	/* 创建新文件以接收 */
-	if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0666)) < 0) {
-		printf("[%s] create error", file_name);
+	if ((fd = open(file_path, O_CREAT | O_WRONLY | O_TRUNC, 0666)) < 0) {
+		printf("[%s] create error", filename);
 		strcpy(buffer, "no");
-		send(connfd, buffer, MAXLINE, 0);
+		send(connfd, buffer, strlen(buffer), 0);
 		return;
 	}
 
@@ -166,9 +175,8 @@ void putfile(int connfd, char* file_name)
 	fds[0].revents = 0;
 
 	strcpy(buffer, "ok");
-	send(connfd, buffer, MAXLINE, 0);
-	printf("正在下载%s,请稍候\n", file_name);
-	char file_cache[MAXLINE] = { 0 };
+	send(connfd, buffer, strlen(buffer), 0);
+	printf("正在下载%s,请稍候\n", filename);
 	
 	while ((bytes = recv(connfd, file_cache, MAXLINE, 0)) > 0)
 	{
@@ -191,6 +199,78 @@ void putfile(int connfd, char* file_name)
 	struct stat st;
 	stat(filename, &st);
 	float filesize = (float)st.st_size / 1024;
-	printf("%s下载完毕，大小为%.2fkb\n", file_name, filesize);
+	printf("%s下载完毕，大小为%.2fkb\n", filename, filesize);
+}
+
+/************************************************************
+ * Function : 	getfile()
+ * Descript : 	发送客户端下载的文件
+ * Calls : 
+ * Called by :	thread_work()
+ * notice : 	
+ * ***********************************************************/
+void getfile(int connfd, char* filename)
+{
+	int fd;
+	long long bytes, file_size, newfile_size;
+	char buffer[CMDLINE] = { 0 };
+	char file_name[CMDLINE] = { 0 };
+	
+	if (filename[0] == ' ')
+		return;
+	if (filename[0] != '.') {
+		strcpy(file_name, "./file/");
+		strcat(file_name, filename);
+	}
+	if ((fd = open(file_name, O_RDONLY)) < 0)
+	{
+		if (errno == ENOENT)
+		{
+			strcpy(buffer, "nonexist");
+			send(connfd, buffer, CMDLINE, 0);
+		}
+		else
+		{
+			strcpy(buffer, "openerror");
+			send(connfd, buffer, CMDLINE, 0);
+		}
+		return;
+	}
+	strcpy(buffer, "begin");
+	send(connfd, buffer, CMDLINE, 0);
+
+	 /* 发送下载文件大小 */
+	file_size = lseek(fd, 0, SEEK_END);
+	lseek(fd, 0, SEEK_SET);
+	sprintf(buffer, "%lld", file_size);
+	printf("传输文件大小 %s\n", buffer);
+	send(connfd, buffer, CMDLINE, 0);
+
+	/* 接收服务器 OK 命令 */
+	recv(connfd, buffer, CMDLINE, 0);
+	if (strncmp(buffer, "no", 2) == 0) {
+		printf("Transport error.\n");
+		return;
+	}
+	else if (strncmp(buffer, "ok", 2) == 0) {
+		long long sum = 0;
+
+		printf("开始传输文件...\n");
+		while ((bytes = read(fd, file_cache, MAXLINE)) > 0)
+		{
+			send(connfd, file_cache, bytes, 0);
+			sum += bytes;
+			if (sum == file_size) {
+				break;
+			}
+		}
+	}
+
+	sleep(1);
+
+	strcpy(buffer, "##over##");
+	send(connfd, buffer, CMDLINE, 0);
+
+	printf("%s : Download Over\n", filename);
 }
 
